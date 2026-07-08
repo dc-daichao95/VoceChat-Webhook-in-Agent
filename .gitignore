@@ -1,0 +1,15 @@
+# secrets & runtime data
+.env
+.env.*
+!.env.example
+
+# runtime data (persisted messages, spool, state)
+data/
+server_data/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
