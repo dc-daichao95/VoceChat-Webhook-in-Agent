@@ -359,3 +359,7 @@ WAN-only 场景下评估过两条 WebDAV 接入路径,选定 **Python 直连**:
 - 长期隐患:NAS 侧会话 JSONL 可能随时间无限增长 → 后续版本加**定期轮转/压缩**(超过阈值切分或归档),v1 暂不实现。
 
 结论:传输开销极小,frequent polling 不会造成网络或存储异常。
+
+## 14. 后续增强(TODO)
+
+- **WebDAV 密码不明文存储(安全)**:当前 `share.env` 明文保存 `passwd`(已 gitignore,不进仓库,但仍明文落盘)。计划改为 **Windows 凭据管理器 / `keyring`**:密码存入 OS 凭据保险库(DPAPI 加密、绑定当前用户),`share.env` 仅保留 `url`+`user`;运行时按 `环境变量 > keyring > share.env(兼容回退)` 的优先级解析,`scripts/webdav_check.py` 与大脑拉取共用该解析逻辑。**待 Phase 0/2/3 功能联调无误后再实施**,以免在联调期引入凭据解析的额外变量。

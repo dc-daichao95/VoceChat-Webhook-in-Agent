@@ -12,6 +12,9 @@ entry.js
 core.js
 _probe/
 
+# build artifacts
+*.tar.gz
+
 # runtime data (persisted messages, spool, state)
 data/
 server_data/

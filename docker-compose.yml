@@ -1,0 +1,35 @@
+# AnsweringMachine receiver —— 在 fnOS NAS 上构建并运行
+# 用法(在 NAS 上,含 Dockerfile/requirements.txt/app/ 的目录里):
+#   docker compose up -d --build
+#
+# 重要:把下面的 volumes 左侧宿主路径改成 fnOS 上「webhook_share」这个 WebDAV 共享
+# 实际映射的目录(即本机能通过 WebDAV 读到的那个文件夹)。receiver 会往其中写
+# conversations/<conv_id>.jsonl 和 raw/<ts>_<mid>.json,本机大脑再经 WebDAV 拉取。
+services:
+  receiver:
+    build: .
+    image: answeringmachine-receiver:latest
+    container_name: answeringmachine-receiver
+    restart: unless-stopped
+    ports:
+      - "8091:8091"          # VoceChat 的 bot webhook URL 指向 http(s)://<NAS>:8091/
+    environment:
+      BOT_UID: "7"            # 来自 bot.config 的 BOT_ID;用于防自我循环 + 群 @ 判定
+      SCOPE_DM: "true"        # 私聊全部应答
+      SCOPE_GROUP_MENTION: "true"  # 群里仅被 @ 才应答
+      RAW_DUMP: "true"        # Phase 0 期间开启;稳定后可改 false
+      DATA_DIR: /webhook_share
+    volumes:
+      - /vol1/webhook_share:/webhook_share   # ← 改成真实宿主路径(WebDAV 共享后端目录)
+    networks:
+      - voce_net             # 与 VoceChat 同网络,VoceChat 才能用容器名访问本服务
+
+# 让 receiver 加入 VoceChat 容器所在的已有网络(容器名互访)。
+# 先查网络名:  docker network ls
+#              docker inspect <vocechat容器名> --format '{{json .NetworkSettings.Networks}}'
+# 把查到的网络名填到下面 name: 处。
+# 之后 VoceChat 的 webhook URL 填:  http://answeringmachine-receiver:8091/
+networks:
+  voce_net:
+    external: true
+    name: CHANGE_ME_vocechat_network   # ← 改成 VoceChat 实际所在的 docker 网络名

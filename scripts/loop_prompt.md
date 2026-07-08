@@ -1,23 +1,39 @@
-# AnsweringMachine 大脑轮询手册
+# AnsweringMachine 大脑轮询手册(供 /loop 使用)
 
-每轮执行:
+## 回复准则(生成回复时遵循)
 
-1. 拉取:用 `share.env`(url/user/passwd)构造 `brain.pull.WebDAVClient`,调用
-   `pull.pull_conversations(client, "conversations/", state, "data/inbound")`,
-   其中 `state` 从 `data/state.json` 读取(不存在则 `{"conversations": {}, "seen_mids": []}`),完成后写回。
-2. 扫描:对 `data/inbound/<conv_id>.jsonl` 逐文件读取记录(每行一个 JSON),用
-   `brain.select.select_pending(conv_id, records, last_processed_mid, seen_mids)`
-   选出待处理入站消息(`last_processed_mid` 取自 `state["conversations"][conv_id]`,
-   `seen_mids` 取自 `state["seen_mids"]`)。
-3. 逐条(按 conv_id、mid 升序)处理:
-   a. 读 `data/history/<conv_id>.jsonl` 作为上下文(全量)。
-   b. 由你(大脑)基于历史 + 本条消息生成回复文本。
-   c. 把该入站记录追加进 `data/history/<conv_id>.jsonl`(direction=in)。
-   d. 发送:私聊 `python send.py --target-uid <uid> --text -`(经 stdin 传文本);
-      群聊 `python send.py --target-gid <gid> --text -`;需要 markdown 加 `--markdown`。
-   e. 发送成功(退出码 0):把出站记录追加进 history(direction=out, in_reply_to=<mid>),
-      更新 `state`:`conversations[conv_id].last_processed_mid=<mid>`、`seen_mids += <mid>`,写回 `data/state.json`。
-   f. 发送失败:记日志,不推进游标(下轮重试);连续失败超过 3 次则跳过该 mid 并告警。
-4. 无新消息则本轮结束。
+- **角色**:智能助手——用你的推理能力 + 该会话历史,实打实回答用户的问题。
+- **语气/长度**:友好且简洁,默认 1~3 句;需要时再展开(复杂问题可分点或给步骤)。
+- **语言**:跟随用户——用户用什么语言就用什么语言回复。
+- **格式**:需要列表/代码/步骤时用 markdown(此时 `reply_and_record.py` 加 `--markdown`);否则纯文本。
+- **诚实**:不确定或信息不足时,礼貌地追问或说明不确定,不要编造事实。
+- **不复读身份**:不必每条都自报"我是助手";被问到再说明即可。
 
-注意:任何一步异常都只跳过当前条目,不中断整轮;游标只在"发送成功"后推进。
+每轮(建议间隔 30~60s)执行:
+
+1. **拉取 + 列待处理**:运行
+   `python scripts/brain_cycle.py`
+   它会经 WebDAV 条件 GET 把 `conversations/*.jsonl` 同步到 `data/inbound/`,
+   更新 `data/state.json` 的 etag,并打印每个会话的待处理入站消息(mid + 内容预览)。
+   - 若输出"没有待处理消息",本轮结束。
+
+2. **逐条(按 conv_id、mid 升序)生成并发送回复**:对每条待处理消息:
+   a. 读 `data/history/<conv_id>.jsonl`(若存在)作为上下文,再结合本条 `data/inbound/<conv_id>.jsonl` 里的内容,
+      由你(大脑)生成回复文本。
+   b. 把回复文本写入 `data/_reply.txt`(UTF-8;用编辑器/Write,不要用 shell echo,避免中文编码问题)。
+   c. 运行:
+      `python scripts/reply_and_record.py --conv <conv_id> --mid <mid> --reply-file data/_reply.txt`
+      (需要 markdown 加 `--markdown`)。
+      该脚本会发送回复、把入站+出站记录追加进 `data/history/<conv_id>.jsonl`、并推进
+      `data/state.json`(`last_processed_mid`、`seen_mids`)。
+   d. 脚本退出码 0 = 成功(已记账);非 0 = 发送失败,**不要**手动推进游标,下轮会重试。
+
+3. 全部处理完,本轮结束。
+
+## 约定与注意
+
+- 会话 id:私聊 `u<对方uid>`,群聊 `g<gid>`;`reply_and_record.py` 会据前缀自动选 send_to_user / send_to_group。
+- 游标只在"发送成功"后推进,保证至少处理一次、不重复回复、不自我循环(receiver 侧已过滤 bot 自身 uid=7)。
+- 群消息仅在被 @ 时才会出现在 `conversations/`(receiver 侧 `SCOPE_GROUP_MENTION` 已处理),所以能进入待处理的群消息都应回复。
+- 任何单条异常只跳过该条,不中断整轮。
+- 配置:发送凭据在 `.env`(`VOCECHAT_SERVER_URL`/`VOCECHAT_API_KEY`/`BOT_UID`),WebDAV 凭据在 `share.env`。
