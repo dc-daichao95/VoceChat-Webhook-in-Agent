@@ -2,6 +2,14 @@
 .env
 .env.*
 !.env.example
+share.env
+
+# probe/test artifacts
+*.xml
+share_app.js
+entry.js
+core.js
+_probe/
 
 # runtime data (persisted messages, spool, state)
 data/
