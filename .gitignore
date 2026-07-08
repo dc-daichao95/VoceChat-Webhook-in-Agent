@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 share.env
+bot.config
 
 # probe/test artifacts
 *.xml
