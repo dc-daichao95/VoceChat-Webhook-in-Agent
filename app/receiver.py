@@ -39,6 +39,12 @@ def create_app(config: Config) -> FastAPI:
     return app
 
 
+def app_factory() -> FastAPI:
+    from .config import load_config
+
+    return create_app(load_config())
+
+
 def _process(config: Config, payload: dict) -> None:
     if config.raw_dump:
         storage.dump_raw(config.data_dir, payload.get("mid"), payload)
