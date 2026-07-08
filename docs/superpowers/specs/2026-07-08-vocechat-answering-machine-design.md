@@ -1,9 +1,10 @@
 # VoceChat 自动应答机器人(AnsweringMachine)设计规格
 
 - 日期:2026-07-08
-- 状态:已通过 brainstorming,待写实现计划
+- 状态:已通过 brainstorming;传输链路已实测验证,待写实现计划
 - 方案:A(接收端 dumb,Cursor 会话当大脑)+ 拓扑 B'(receiver 作 Docker 跑在 fnOS NAS,本机经 WebDAV 拉取)
-- 传输:WebDAV over HTTPS(替代早期设想的 SSH/rsync);本机大脑用 Python 直连 WebDAV,不依赖 Windows WebClient/Redirector
+- 传输:WebDAV over HTTPS(替代早期设想的 SSH/rsync);本机大脑用 Python 直连(`requests`),不依赖 Windows WebClient/Redirector
+- 验证:`scripts/webdav_check.py` 已跑通 PROPFIND=207 / PUT=201 / GET=200(字节一致)/ DELETE=204;轮询开销实测极小(见 §13)
 
 ## 1. 目标与范围
 
@@ -39,7 +40,7 @@
 │  data/state.json                ← 处理游标 + seen_mids               │
 │                                                                     │
 │  Cursor 会话(大脑, /loop):                                         │
-│    1. WebDAV PROPFIND 列表 + GET 下载 → data/inbound/               │
+│    1. WebDAV PROPFIND 列表 + 条件 GET(仅下载变化文件)→ data/inbound/│
 │    2. 找 mid > last_processed_mid 的新入站                          │
 │    3. 读 history 作上下文 → 生成回复                                 │
 │    4. send.py 出站 POST /api/bot/... 回 VoceChat ───────────────────┼──► VoceChat
@@ -64,12 +65,12 @@
 | 链路 | 方向 | 怎么通 | 备注 |
 |---|---|---|---|
 | VoceChat → receiver | 公网 | 直接 HTTP(S) | webhook URL = NAS 上 receiver 的公网地址/端口 |
-| WebDAV spool → 本机 | 本机拉取 | WebDAV over HTTPS(PROPFIND 列 + GET 下),Basic 鉴权 | 本机出站 HTTPS,防火墙友好;凭证见 `share.env` |
+| WebDAV spool → 本机 | 本机拉取 | WebDAV over HTTPS(PROPFIND 列 + 条件 GET 下),Basic 鉴权 | 本机出站 HTTPS,防火墙友好;凭证见 `share.env` |
 | 本机 send.py → VoceChat | 本机出站 | 出站 HTTP POST + `x-api-key` | 出站,通 |
 
-全部为本机**出站** HTTPS,不需要本机有公网 IP、不需要内网穿透。WebDAV 用 **Python 直连**(`requests`/`webdavclient3`),**不依赖 Windows WebClient/WebDAV-Redirector**(该功能在本机为 `Available` 未安装;走 Python 直连可免安装、免重启,也绕开 WebClient 的单文件大小限制)。
+全部为本机**出站** HTTPS,不需要本机有公网 IP、不需要内网穿透。WebDAV 用 **Python 直连**(`requests` + 标准库 `xml.etree` 解析 PROPFIND),**不依赖 Windows WebClient/WebDAV-Redirector**。
 
-**前置条件(当前未满足)**:fnOS WebDAV 账号需可用——用有效 fnOS 系统用户 + 对 spool 目录有读写权限。现测得 `share.env` 中凭证返回 401,需在 fnOS 侧修正后方可联通。
+**验证结论(已通过 `scripts/webdav_check.py` 实测)**:凭证修正后 `PROPFIND=207`、`PUT=201`、`GET=200`(下载字节与上传一致)、`DELETE=204`,读写删往返全部可用。自签名证书用 `verify=False` 跳过(见 §12 选型理由)。
 
 ## 4. VoceChat 接口事实(已核实)
 
@@ -143,8 +144,8 @@ data/
 ```json
 {
   "conversations": {
-    "u7910": { "last_processed_mid": 2978, "last_processed_at": 1672048490000 },
-    "g2": { "last_processed_mid": 3010, "last_processed_at": 1672048500000 }
+    "u7910": { "last_processed_mid": 2978, "last_processed_at": 1672048490000, "etag": "\"a1b2c3\"" },
+    "g2": { "last_processed_mid": 3010, "last_processed_at": 1672048500000, "etag": "\"d4e5f6\"" }
   },
   "seen_mids": [2978, 3010]
 }
@@ -152,6 +153,7 @@ data/
 
 - `last_processed_mid`:该会话已回复到的最后入站 `mid`;大脑仅处理 `mid > last_processed_mid` 的入站。
 - `seen_mids`:本机侧入站去重(与服务器 `seen_mids.json` 独立),防止已处理的 mid 被重复回复。
+- `etag`:该会话 spool 文件上次拉取到的 WebDAV `ETag`(或 `Last-Modified`),用于**条件 GET**;下轮 PROPFIND 若该文件 etag 未变则跳过下载,变了才 `GET`(带 `If-None-Match`,服务器可回 304 零传输)。
 
 ## 6. dumb receiver 行为
 
@@ -188,8 +190,9 @@ Phase 0 降级行为:`RAW_DUMP=true` 时额外把每个原始 payload 写到 `/w
 由 `/loop` 在当前 Cursor 会话内按 30~60s 间隔运行处理 prompt。每轮:
 
 ```
-1. 拉取: WebDAV PROPFIND 列出 /webhook_share/conversations/ 下各 <conv_id>.jsonl,
-         GET 下载到 data/inbound/(Basic 鉴权, HTTPS;失败则记日志、跳过本轮)
+1. 拉取: WebDAV PROPFIND(Depth:1)列出 /webhook_share/conversations/ 下各 <conv_id>.jsonl 及其 etag/大小;
+         对 etag 变化的文件才 GET(带 If-None-Match)下载到 data/inbound/,并更新 state 的 etag;
+         复用单条 keep-alive HTTPS 会话;失败则记日志、指数退避、跳过本轮
 2. 扫描: 遍历 data/inbound/<conv_id>.jsonl, 选出:
            direction=="in" 且 mid > last_processed_mid 且 mid ∉ seen_mids
 3. 逐条处理(按 conv_id、mid 升序):
@@ -277,7 +280,7 @@ passwd=<对应密码>
 ## 10. 测试策略与里程碑
 
 - **Phase 0(测通 webhook)**:receiver `RAW_DUMP=true`,VoceChat 给 bot 发消息 → `/webhook_share/raw/` 出现该 JSON,确认 `properties`/`target`/`content_type` 真实结构;本机 `python send.py --target-uid <uid> --text "hi"` → VoceChat 收到回复。分别验证入站落盘与出站发送。
-- **Phase 0.5(测通 WebDAV)**:用有效 fnOS 凭证 PROPFIND 列出 `/webhook_share/`、GET 下载已上传的测试文件、PUT 一个测试文件验证写入(当前 `share.env` 凭证 401,需先修正)。
+- **Phase 0.5(测通 WebDAV)· 已完成**:`scripts/webdav_check.py` 实测 PROPFIND=207 / PUT=201 / GET=200(字节一致)/ DELETE=204,读写删往返可用;`--bench` 已验证轮询开销极小(见 §13)。
 - **Phase 1(落盘+拉取)**:receiver 按 conv_id 落盘到 WebDAV spool;本机经 WebDAV 拉到 `data/inbound/`,能看到消息。
 - **Phase 2(端到端私聊)**:接大脑 loop,私聊来消息 → 生成回复 → 发回 → 记账;几十秒内收到基于历史的回复,state/history 正确,不自我循环。
 - **Phase 3(群 @ 应答)**:据 Phase 0 结构实现 @ 检测;群里 @ 才回。
@@ -294,7 +297,7 @@ passwd=<对应密码>
 ```
 AnsweringMachine/
 ├─ README.md
-├─ requirements.txt              # fastapi, uvicorn, requests, webdavclient3, python-dotenv, pytest, responses
+├─ requirements.txt              # fastapi, uvicorn, requests, python-dotenv, pytest, responses
 ├─ .gitignore                    # .env, share.env, data/, server_data/, __pycache__
 ├─ .env.example
 ├─ app/
@@ -309,6 +312,7 @@ AnsweringMachine/
 │  └─ select.py                  # 从 inbound+state 选待处理(纯函数)
 ├─ scripts/
 │  ├─ run_receiver.sh            # NAS(Docker)启动 receiver
+│  ├─ webdav_check.py            # WebDAV 连通性/往返/轮询成本探测(已用于验证)
 │  └─ loop_prompt.md             # 供 /loop 使用的大脑处理 prompt
 ├─ tests/
 │  ├─ test_filters.py
@@ -318,3 +322,40 @@ AnsweringMachine/
 ```
 
 `filters.py` / `select.py` 抽为纯函数以便单测;`loop_prompt.md` 是大脑每轮操作手册。
+
+## 12. 传输选型:Python 直连 vs 盘符挂载
+
+WAN-only 场景下评估过两条 WebDAV 接入路径,选定 **Python 直连**:
+
+| 维度 | 盘符挂载(WebDAV Redirector/WebClient) | Python 直连(`requests`,已采用) |
+|---|---|---|
+| 每次操作往返 | 更啰嗦(open 常触发 PROPFIND+HEAD+GET,有时 LOCK) | 精确控制:PROPFIND 列 + 条件 GET |
+| 缓存新鲜度 | 目录/属性缓存(TTL 数十秒)→ **新消息可能延迟可见** | etag/If-None-Match 自控,新消息即刻可见 |
+| 单文件上限 | 默认 ~50MB(需改注册表) | 无限制 |
+| 自签名证书 | 严格校验,需导入证书 | `verify=False` 跳过 |
+| 前置成本 | 装功能 + **重启** + 注册表 + 证书 | 无(`pip install requests`) |
+| 可靠性/可观测 | 偶发卡死/掉盘,错误笼统 | 显式超时/重试/退避,错误码清晰 |
+
+对小 JSON、30~60s 轮询的负载,两者原始带宽差异都可忽略;但挂载的**缓存陈旧**会拖慢应答,且带来重启/证书/50MB 等前置与可靠性代价,故不采用。(本机已安装 `WebDAV-Redirector` 功能但挂起待重启;本项目不依赖它。)
+
+## 13. 轮询成本与网络/存储防护
+
+`scripts/webdav_check.py --bench` 实测(经公网 duckdns):
+
+- 单次 PROPFIND 响应 ~609 B;延迟 avg 67ms / p50 45ms / p95 489ms。
+- 每 30s 轮询 → 2880 次/天 ≈ **1.7 MB/天**;每 60s → 1440 次/天 ≈ **856 KB/天**(仅列目录)。
+
+**网络防护:**
+
+- **条件 GET**:仅下载 etag 变化的文件;未变则 304 零传输,稳态几乎只剩 PROPFIND 开销。
+- **复用单条 keep-alive HTTPS 会话**,避免每轮 TLS 握手(p95 尖峰多为新建连接/NAS 唤醒)。
+- 轮询间隔 30~60s(不做亚秒轮询);失败**指数退避**,避免打爆 NAS/触发限流。
+- 请求设显式超时(PROPFIND 15s、GET 30s),超时即跳过本轮。
+
+**存储防护:**
+
+- 本机 `inbound/` 每轮覆盖(有界);`history/`、`state.json` 为小文本;消息均为小 JSON。
+- Phase 0 后关闭 `RAW_DUMP`;处理完的 inbound 及时清理。
+- 长期隐患:NAS 侧会话 JSONL 可能随时间无限增长 → 后续版本加**定期轮转/压缩**(超过阈值切分或归档),v1 暂不实现。
+
+结论:传输开销极小,frequent polling 不会造成网络或存储异常。
