@@ -110,14 +110,17 @@ Webhook 载荷(POST 到 webhook URL):
 # 服务器
 server_data/
   conversations/<conv_id>.jsonl   # 仅入站, append-only
+  seen_mids.json                  # receiver 侧入站去重(独立于本机)
   raw/<timestamp>_<mid>.json      # Phase 0: 原样 raw payload
 
 # 本机
 data/
   inbound/<conv_id>.jsonl         # rsync 镜像(只读, 会被覆盖)
   history/<conv_id>.jsonl         # 权威完整历史(in + out)
-  state.json                      # 处理游标 + seen_mids
+  state.json                      # 处理游标 + seen_mids(本机侧, 独立于服务器)
 ```
+
+去重是两层、各自独立:receiver 侧 `server_data/seen_mids.json` 避免 spool 出现重复行;本机 `state.json` 的 `seen_mids` + `last_processed_mid` 避免重复回复。二者互不依赖,任一层失效另一层仍可兜底(重复行会被本机游标拦截)。
 
 `conversations/<conv_id>.jsonl` / `history/<conv_id>.jsonl` 每行一条:
 
@@ -143,7 +146,7 @@ data/
 ```
 
 - `last_processed_mid`:该会话已回复到的最后入站 `mid`;大脑仅处理 `mid > last_processed_mid` 的入站。
-- `seen_mids`:入站去重(VoceChat 偶尔重推)。
+- `seen_mids`:本机侧入站去重(与服务器 `seen_mids.json` 独立),防止已处理的 mid 被重复回复。
 
 ## 6. dumb receiver 行为
 
@@ -166,7 +169,7 @@ POST `/` 流程(纯机械):
      target.uid 存在 → 私聊 → conv_id="u{from_uid}", 纳入
      target.gid 存在 → 群聊 → conv_id="g{gid}";
         仅当 properties 的 mentions 含 BOT_UID 才纳入, 否则丢弃
-6. mid 去重:mid ∈ seen_mids → 丢弃;否则加入 seen_mids
+6. mid 去重:mid ∈ server_data/seen_mids.json → 丢弃;否则加入
 7. 追加一行 in 记录到 server_data/conversations/{conv_id}.jsonl
 8. 返回 200
 ```
