@@ -1,7 +1,9 @@
 # 设计:把 browser-use 接为「Cursor 可驱动的浏览器 Skill」(形态 A)
 
 - 日期:2026-07-09
-- 状态:待评审
+- 状态:已实施(采用 §9 回退 = 库封装)
+
+> **实施记录(2026-07-09)**:形态 A 的 `bu` CLI 在 Windows 实测可驱动浏览器,但执行完前台进程不自退(即便追加 `os._exit(0)` 亦无效)。据用户决定采用 spec §9 **回退方案**:用 browser-use 的 CDP 依赖 `cdp_use.CDPClient` 写 `scripts/browse.py`(`open/info/text/js/shot/click` 子命令,进程干净退出),Cursor Skill 指向它。`browser_chrome.ps1` 保留;`bu_run.ps1` 已删除(不再需要 CLI shim)。`bu` 仍装在 `.venv-browseruse` 备用。
 - 关联:`thrid-party/browser-use`(browser-use 本地克隆)、`Agent.md`
 
 ## 1. 背景与目标
