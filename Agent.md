@@ -60,6 +60,7 @@ AnsweringMachine/
 - **类型注解 (Type Hints)**：公开函数尽量添加类型注解，提升可读性与工具支持；配合 `from __future__ import annotations`。
 - **配置管理**：通过环境变量（可选 `.env` / `share.env`）加载配置，敏感凭据不入库、不打印到日志或会话输出。
 - **架构分层**：严格保持核心逻辑（过滤/落盘/拉取/选择等纯逻辑）与 Web/CLI 层解耦。业务逻辑不应混入 FastAPI 路由处理器或命令行入口；纯函数优先，便于单测。
+- **文档归置**：**【约束】** 非功能类文档——资料、记录、待办、设计/计划规格、说明等——一律放在 `docs/` 下（如 `docs/TODO.md`、`docs/superpowers/specs|plans/`），不得散落在仓库根。仓库根仅保留 `README.md` 与 `Agent.md` 这类入口/约定文件。
 
 ## 边界 (Boundaries)
 - **范围限制**：绝对不要重构用户请求的直接范围之外的代码。
