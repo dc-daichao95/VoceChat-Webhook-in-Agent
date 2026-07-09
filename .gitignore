@@ -16,6 +16,11 @@ _probe/
 build/
 *.tar.gz
 
+# browser-use skill (local third-party + dedicated env, not committed)
+thrid-party/
+.venv-browseruse/
+.browser-use-profile/
+
 # runtime data (persisted messages, spool, state)
 data/
 server_data/
