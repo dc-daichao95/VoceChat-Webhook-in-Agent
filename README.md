@@ -45,7 +45,10 @@ AnsweringMachine/
 ├─ scripts/
 │  ├─ package_receiver.ps1   # 打包 receiver 构建上下文为 tar.gz(输出到 build/)
 │  ├─ run_receiver.sh        # NAS 上 docker build+run(compose 之外的备选)
-│  └─ webdav_check.py        # WebDAV 连通性 / 往返 / 轮询成本自检
+│  ├─ webdav_check.py        # WebDAV 连通性 / 往返 / 轮询成本自检
+│  ├─ browser_chrome.ps1     # 启动带 CDP 的专用 Chrome(browser-use skill)
+│  └─ browse.py              # Cursor 驱动的 CDP 浏览器封装(browser-use skill)
+├─ .cursor/skills/           # Cursor Agent Skills(如 browser-use)
 ├─ skill/                    # 供 agent 使用的大脑操作手册
 │  └─ loop_prompt.md         # 供 /loop 使用的大脑每轮操作手册
 ├─ build/                    # 构建产物(打包 tar.gz;已 gitignore)
@@ -134,6 +137,34 @@ python send.py --target-uid <uid> --text "hi from bot"
 python send.py --target-gid <gid> --text "**hi**" --markdown
 echo "多行内容" | python send.py --target-uid <uid> --text -   # 从 stdin 读长文本
 ```
+
+## 浏览器能力(browser-use skill,可选)
+
+让大脑(Cursor)能直接驱动本地 Chrome 上网:导航、截图、提取文本、执行 JS、按坐标点击。
+用于回答"需要上网"的消息。**不需要额外 LLM/API Key**,经 CDP 直连,进程干净退出。
+
+一次性安装(需 Python 3.12 + uv;`thrid-party/browser-use` 为 browser-use 本地克隆):
+
+```powershell
+uv venv .venv-browseruse --python 3.12
+uv pip install --python .venv-browseruse -e ./thrid-party/browser-use
+```
+
+启动专用 Chrome(CDP:9222,独立 profile,不碰日常登录态)并调用:
+
+```powershell
+powershell -File scripts/browser_chrome.ps1
+.venv-browseruse/Scripts/python.exe scripts/browse.py open "https://example.com"
+.venv-browseruse/Scripts/python.exe scripts/browse.py info      # 标题/URL
+.venv-browseruse/Scripts/python.exe scripts/browse.py text      # 可见正文
+.venv-browseruse/Scripts/python.exe scripts/browse.py js "1+2"  # 执行 JS
+.venv-browseruse/Scripts/python.exe scripts/browse.py shot out.png
+.venv-browseruse/Scripts/python.exe scripts/browse.py click <x> <y>
+```
+
+- Cursor Skill:`.cursor/skills/browser-use/`(`SKILL.md` / `reference.md` / `examples.md`);会话中可用 `/browser-use` 调用。
+- 设计与决策(为何用 CDP 库封装而非 `bu` CLI):`docs/superpowers/specs/2026-07-09-browser-use-skill-design.md`。
+- `thrid-party/`、`.venv-browseruse/`、`.browser-use-profile/` 均已 `.gitignore`,不进仓库。
 
 ## 数据流与落盘
 
