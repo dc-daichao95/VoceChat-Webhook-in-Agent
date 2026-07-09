@@ -9,7 +9,7 @@
 - **诚实**:不确定或信息不足时,礼貌地追问或说明不确定,不要编造事实。
 - **不复读身份**:不必每条都自报"我是助手";被问到再说明即可。
 
-每轮(建议间隔 10~30s)执行:
+每轮(建议间隔 60s)执行:
 
 1. **拉取 + 列待处理**:运行
    `python scripts/brain_cycle.py`
@@ -18,8 +18,8 @@
    - 若输出"没有待处理消息",本轮结束。
 
 2. **逐条(按 conv_id、mid 升序)生成并发送回复**:对每条待处理消息:
-   a. 读 `data/history/<conv_id>.jsonl`(若存在)作为上下文,再结合本条 `data/inbound/<conv_id>.jsonl` 里的内容,
-      由你(大脑)生成回复文本。
+   a. 运行 `python scripts/build_context.py --conv <conv_id>` 取上下文(**用户事实卡片 + 早期摘要 + 最近 N 条逐字**,已压缩、有界),
+      再结合本条 `data/inbound/<conv_id>.jsonl` 里的内容,由你(大脑)生成回复文本。
    b. 把回复文本写入 `data/_reply.txt`(UTF-8;用编辑器/Write,不要用 shell echo,避免中文编码问题)。
    c. 运行:
       `python scripts/reply_and_record.py --conv <conv_id> --mid <mid> --reply-file data/_reply.txt`
@@ -29,6 +29,14 @@
    d. 脚本退出码 0 = 成功(已记账);非 0 = 发送失败,**不要**手动推进游标,下轮会重试。
 
 3. 全部处理完,本轮结束。
+
+4. **每轮末压缩超长历史**(保持上下文有界):
+   a. 运行 `python scripts/compact.py --check`。输出 `COMPACT_NONE` 则跳过本步。
+   b. 对每个 `COMPACT_NEEDED <conv> raw=<n> keep=<N>`:
+      - 读 `data/history/<conv>.jsonl` 的**较早部分**(除最近 N 条外)+ 现有 `data/history/<conv>.summary.md`、`data/history/<conv>.facts.json`(若有);
+      - 用 Write **更新** `data/history/<conv>.summary.md`(融合旧信息,≤~1500 字,保留关键事实/进展)与 `data/history/<conv>.facts.json`(`{name/称呼, language, preferences, taboos, notes}`,按需补充);
+      - 运行 `python scripts/compact.py --apply --conv <conv>`(把旧记录 gzip 归档到 `data/archive/<conv>/`,活跃 JSONL 截到最近 N)。
+   c. 单个会话压缩失败只跳过该会话,不中断整轮。
 
 ## 约定与注意
 
