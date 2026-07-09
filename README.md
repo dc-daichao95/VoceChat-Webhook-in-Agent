@@ -60,22 +60,27 @@ AnsweringMachine/
 - **NAS(receiver)**:fnOS,自带 Docker;一个由 WebDAV 共享暴露的目录(本机据此拉取)。
 - **VoceChat**:已建好 bot,拿到 `BOT_ID`、`API Key`、server 地址;bot 的 webhook URL 指向 receiver。
 
-## 配置(三个文件,均不进 git)
+## 配置
 
-| 文件 | 用途 | 关键项 |
-|---|---|---|
-| `bot.config` | VoceChat bot 凭据(本机 + 参考) | `BOT_BASE_URL` / `BOT_API_KEY` / `BOT_ID` / `BOT_NAME` |
-| `.env` | 本机 `send.py` | `VOCECHAT_SERVER_URL` / `VOCECHAT_API_KEY`(可由 `bot.config` 映射)|
-| `share.env` | 本机 WebDAV 拉取 | `url`(WebDAV 共享地址,以 `/` 结尾)/ `user` / `passwd` |
+真实配置文件(含密钥/密码)**均不进 git**;仓库内提供两个占位模板(**已跟踪**),复制后填入真实值即可。
 
-receiver 的配置通过 **容器环境变量** 提供(见 `docker-compose.yml`):`BOT_UID`、`SCOPE_DM`、`SCOPE_GROUP_MENTION`、`RAW_DUMP`、`DATA_DIR`。receiver **不需要任何密钥**(只收+落盘,不发送)。
+| 文件 | 模板 | 用途 | 关键项 |
+|---|---|---|---|
+| `.env` | `.env.example` | 本机 `send.py` + receiver 环境变量参考 | `VOCECHAT_SERVER_URL` / `VOCECHAT_API_KEY`;`BOT_UID` 等 receiver 项 |
+| `share.env` | `share.env.example` | 本机 WebDAV 拉取 | `url`(WebDAV 共享地址,以 `/` 结尾)/ `user` / `passwd` |
 
-从 `bot.config` 生成本机 `.env`(PowerShell,一次性):
+> 运行时只使用这两个文件。VoceChat 的 bot 凭据(server 地址、API Key、bot uid)直接填进 `.env` 即可。
+
+**配置流程**——从模板复制,再编辑填入真实值:
 
 ```powershell
-$cfg=@{}; Get-Content bot.config | %{ if($_ -match '^\s*([^=]+)=(.*)$'){ $cfg[$matches[1].Trim()]=$matches[2].Trim() } }
-Set-Content .env @("VOCECHAT_SERVER_URL=$($cfg['BOT_BASE_URL'])","VOCECHAT_API_KEY=$($cfg['BOT_API_KEY'])") -Encoding UTF8
+Copy-Item .env.example .env
+Copy-Item share.env.example share.env
+# 然后用编辑器打开 .env / share.env,替换其中的占位值(<...> / replace-me)
 ```
+
+- `share.env`:填 NAS 的 WebDAV `url`(以 `/` 结尾)、`user`、`passwd`。填好后用 `python scripts/webdav_check.py --roundtrip` 验证(见下文自检)。
+- `.env`:本机 `send.py` 只用到 `VOCECHAT_SERVER_URL` / `VOCECHAT_API_KEY`;文件里的 `BOT_UID`、`SCOPE_*`、`DATA_DIR`、`RAW_DUMP` 是 **receiver 端参考**,实际由 `docker-compose.yml` 的容器环境变量提供(receiver **不需要任何密钥**,只收+落盘)。
 
 ## 本机初始化
 
@@ -150,7 +155,8 @@ python -m pytest -q        # 全部单测(应全绿)
 
 ## 安全
 
-- `.env`、`share.env`、`bot.config` 均已在 `.gitignore`,不进仓库;`*.tar.gz` 构建产物同样忽略。
+- `.env`、`share.env`(以及可选的 `bot.config`)均已在 `.gitignore`,不进仓库;`*.tar.gz` 构建产物同样忽略。
+- 仅 `.env.example` / `share.env.example` 两个**占位模板**(无真实凭据)进仓库,供他人按流程复制填写。
 - `VOCECHAT_API_KEY` / WebDAV 密码不落盘到 JSONL、不打印到会话输出。
 - WebDAV 走 HTTPS + Basic;对自签名证书 `webdav_check.py` 默认 `verify=False`(见规格 §12)。
 - **待办**:WebDAV 密码目前在 `share.env` 明文;计划改用 Windows 凭据管理器 / `keyring`(见规格 §14),待联调稳定后实施。
