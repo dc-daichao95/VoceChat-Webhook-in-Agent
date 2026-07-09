@@ -11,7 +11,7 @@
   python scripts/brain_cycle.py --explore  # 额外打印 WebDAV 目录结构(排障用)
 
 发送回复不在本脚本内自动进行 —— 由大脑(Cursor)读取待处理内容后,
-用 send.py 发出,再更新 data/state.json(见 scripts/loop_prompt.md)。
+用 send.py 发出,再更新 data/state.json(见 skill/loop_prompt.md)。
 """
 from __future__ import annotations
 

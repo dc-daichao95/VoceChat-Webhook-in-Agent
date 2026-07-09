@@ -9,10 +9,10 @@
 
 .EXAMPLE
     powershell -File scripts/package_receiver.ps1
-    powershell -File scripts/package_receiver.ps1 -Output dist/receiver.tar.gz
+    powershell -File scripts/package_receiver.ps1 -Output build/receiver.tar.gz
 #>
 param(
-    [string]$Output = "receiver-build-context.tar.gz"
+    [string]$Output = "build/receiver-build-context.tar.gz"
 )
 
 $ErrorActionPreference = "Stop"

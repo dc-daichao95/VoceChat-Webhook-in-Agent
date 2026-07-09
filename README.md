@@ -43,10 +43,12 @@ AnsweringMachine/
 │  └─ select.py              # 纯函数:从 inbound+state 选出待处理入站
 ├─ send.py                   # 出站发送 CLI(本机)
 ├─ scripts/
-│  ├─ package_receiver.ps1   # 打包 receiver 构建上下文为 tar.gz
+│  ├─ package_receiver.ps1   # 打包 receiver 构建上下文为 tar.gz(输出到 build/)
 │  ├─ run_receiver.sh        # NAS 上 docker build+run(compose 之外的备选)
-│  ├─ webdav_check.py        # WebDAV 连通性 / 往返 / 轮询成本自检
+│  └─ webdav_check.py        # WebDAV 连通性 / 往返 / 轮询成本自检
+├─ skill/                    # 供 agent 使用的大脑操作手册
 │  └─ loop_prompt.md         # 供 /loop 使用的大脑每轮操作手册
+├─ build/                    # 构建产物(打包 tar.gz;已 gitignore)
 ├─ Dockerfile               # receiver 镜像(python:3.11-slim)
 ├─ docker-compose.yml       # NAS 上构建并运行 receiver
 ├─ requirements.txt
@@ -104,7 +106,7 @@ python scripts/webdav_check.py --bench 20      # 轮询成本估算
 
    ```powershell
    powershell -File scripts/package_receiver.ps1
-   # 生成 receiver-build-context.tar.gz(仅含 Dockerfile / requirements.txt / docker-compose.yml / app/)
+   # 生成 build/receiver-build-context.tar.gz(仅含 Dockerfile / requirements.txt / docker-compose.yml / app/)
    ```
 
 2. **上传**该 tar.gz 到 NAS(fnOS 文件管理、SMB、或 scp 均可),解压到一个目录。
@@ -122,7 +124,7 @@ python scripts/webdav_check.py --bench 20      # 轮询成本估算
 
 ## 运行大脑(本机)
 
-在 Cursor 会话中用 `/loop`(建议 30~60s 间隔)执行 `scripts/loop_prompt.md` 描述的流程:
+在 Cursor 会话中用 `/loop`(建议 30~60s 间隔)执行 `skill/loop_prompt.md` 描述的流程:
 拉取(PROPFIND + 条件 GET)→ 选出待处理入站 → 读历史生成回复 → `send.py` 发回 → 记账(更新 `data/state.json`、`data/history/`)。
 
 手动发送测试:
