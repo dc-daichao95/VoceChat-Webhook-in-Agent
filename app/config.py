@@ -1,4 +1,5 @@
 # app/config.py
+"""接收器配置:从环境变量(可选 .env)加载并校验为不可变的 Config。"""
 from __future__ import annotations
 
 import os
@@ -25,6 +26,7 @@ def _as_bool(value, default: bool) -> bool:
 
 
 def load_config(env_path=None) -> Config:
+    """加载并校验配置;BOT_UID 缺失即抛 ValueError(它是防自我循环/群 @ 判定的必需项)。"""
     if env_path:
         load_dotenv(env_path)
     else:

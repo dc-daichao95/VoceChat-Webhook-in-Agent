@@ -1,4 +1,5 @@
 # brain/pull.py
+"""大脑侧 WebDAV 拉取:PROPFIND 列目录 + 基于 ETag 的条件 GET,把变化的会话增量下载到本机。"""
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
@@ -13,6 +14,8 @@ DAV = "{DAV:}"
 
 
 class WebDAVClient:
+    """最小 WebDAV 客户端(PROPFIND/GET);verify 默认 False 以兼容 NAS 自签名证书。"""
+
     def __init__(self, base_url: str, user: str, passwd: str, verify: bool = False):
         self.base = base_url.rstrip("/") + "/"
         self.session = requests.Session()
@@ -25,16 +28,19 @@ class WebDAVClient:
         return urljoin(self.base, path.lstrip("/"))
 
     def list_dir(self, path: str, timeout: float = 15) -> list:
+        """PROPFIND Depth:1 列出目录条目(含 etag),供增量判断使用。"""
         r = self.session.request("PROPFIND", self._url(path), headers={"Depth": "1"}, timeout=timeout)
         r.raise_for_status()
         return parse_listing(r.text)
 
     def get(self, path: str, etag=None, timeout: float = 30) -> requests.Response:
+        """条件 GET:带 If-None-Match 时未变返回 304,省带宽;调用方需自行判断状态码。"""
         headers = {"If-None-Match": etag} if etag else {}
         return self.session.get(self._url(path), headers=headers, timeout=timeout)
 
 
 def parse_listing(xml_text: str) -> list:
+    """解析 WebDAV PROPFIND 的 multistatus XML,提取每项的 href/name/is_dir/etag。"""
     entries = []
     root = ET.fromstring(xml_text)
     for resp in root.findall(f"{DAV}response"):
