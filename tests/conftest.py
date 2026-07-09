@@ -1,5 +1,13 @@
 """全局测试隔离:阻止各模块加载仓库根真实 .env,保证测试不依赖运行环境。"""
+import sys
+from pathlib import Path
+
 import pytest
+
+# scripts/ 下的模块(如 compact)可被测试直接 import。
+_SCRIPTS = str(Path(__file__).resolve().parent.parent / "scripts")
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
 
 
 @pytest.fixture(autouse=True)
