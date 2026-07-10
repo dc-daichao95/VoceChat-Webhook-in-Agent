@@ -25,6 +25,15 @@ thrid-party/
 data/
 server_data/
 
+# scheduler runtime artifacts (queue DB + WAL/SHM, single-instance lock, logs)
+# data/ 已整体忽略;下列显式模式声明意图,并覆盖自定义路径下的同类产物。
+*.db
+*.db-wal
+*.db-shm
+*.lock
+scheduler-health.json
+logs/
+
 # python
 __pycache__/
 *.py[cod]

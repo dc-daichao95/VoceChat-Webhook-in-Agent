@@ -71,7 +71,7 @@ AnsweringMachine/
 
 | 文件 | 模板 | 用途 | 关键项 |
 |---|---|---|---|
-| `.env` | `.env.example` | 本机 `send.py` + receiver 环境变量参考 | `VOCECHAT_SERVER_URL` / `VOCECHAT_API_KEY`;`BOT_UID` 等 receiver 项 |
+| `.env` | `.env.example` | 本机 `send.py` + 调度器 + receiver 环境变量参考 | `VOCECHAT_SERVER_URL` / `VOCECHAT_API_KEY`;`SCHEDULER_*`(轮询/SLA/quiet/退避/路径);`BOT_UID` 等 receiver 项 |
 | `share.env` | `share.env.example` | 本机 WebDAV 拉取 | `url`(WebDAV 共享地址,以 `/` 结尾)/ `user` / `passwd` |
 
 > 运行时只使用这两个文件。VoceChat 的 bot 凭据(server 地址、API Key、bot uid)直接填进 `.env` 即可。
@@ -127,8 +127,13 @@ python scripts/webdav_check.py --bench 20      # 轮询成本估算
 
 ## 运行大脑(本机)
 
-在 Cursor 会话中用 `/loop`(建议 30~60s 间隔)执行 `skill/loop_prompt.md` 描述的流程:
-拉取(PROPFIND + 条件 GET)→ 选出待处理入站 → 读历史生成回复 → `send.py` 发回 → 记账(更新 `data/state.json`、`data/history/`)。
+> **v2 起推荐用「可靠调度器 + Cursor 消费者」取代固定 `/loop` 轮询**(见下一节)。
+> 常驻调度器独立负责拉取、入队、SLA 通知与恢复,Cursor 只在有任务时领取并生成正式
+> 回复。固定 `/loop` 仅作应急模式保留(见 `skill/loop_prompt.md` 的「应急模式」)。
+
+历史流程(应急/参考):在 Cursor 会话中用 `/loop`(建议 30~60s 间隔)执行
+`skill/loop_prompt.md` 描述的流程:拉取(PROPFIND + 条件 GET)→ 选出待处理入站 →
+读历史生成回复 → 发回 → 记账。应急模式不得与调度器同时消费同一队列。
 
 手动发送测试:
 
@@ -137,6 +142,135 @@ python send.py --target-uid <uid> --text "hi from bot"
 python send.py --target-gid <gid> --text "**hi**" --markdown
 echo "多行内容" | python send.py --target-uid <uid> --text -   # 从 stdin 读长文本
 ```
+
+## 可靠调度器 + Cursor 消费者(v2)
+
+固定 `/loop` 的根因问题:**可靠调度与智能处理耦合,并依赖 Cursor 会话持续存活**。
+一旦 Cursor 调度/连接/耗时任务停顿,轮询随之停止,消息可能长时间无响应
+(2026-07-09 夜间实测:`mid=1431` 被发现后正式回复延迟 74 分钟)。v2 将其拆为两个
+独立生命周期,并用 10s/45s SLA 保证联网消息不再长时间"石沉大海"。
+
+设计规格:`docs/superpowers/specs/2026-07-10-reliable-scheduler-online-response-design.md`;
+实施计划:`docs/superpowers/plans/2026-07-10-reliable-scheduler-online-response.md`。
+
+### 架构
+
+```
+用户 → VoceChat → receiver(NAS, Docker) → NAS 目录(WebDAV 暴露)
+                                              │ ① 自适应 WebDAV 轮询 + 条件 GET
+                                              ▼
+                        ┌──────────── 独立调度器(常驻 Python) ───────────┐
+                        │  每轮:恢复过期租约 → 拉取(熔断)→ 幂等入队      │
+                        │        → 10s/45s SLA 通知 → 健康快照            │
+                        │  SQLite 持久队列 data/queue.db(WAL)            │
+                        └───────────────────────┬────────────────────────┘
+                                                 │ ② 按会话领取任务(租约)
+                                                 ▼
+                        ┌──────────── Cursor 消费者(在线时) ────────────┐
+                        │  build_context → 分类 network_mode             │
+                        │  ③ 优先 HTTP 快路径(online_fetch,逐步写证据) │
+                        │     仅必须交互时回退 browser-use               │
+                        │  ④ send-final(按 mid 幂等,只发一次)→ 记账   │
+                        └────────────────────────────────────────────────┘
+```
+
+- **调度器**不依赖 Cursor:Cursor 断线/卡死时仍持续收件、入队、发占位与状态。
+- **SQLite 队列**保证幂等入队(`UNIQUE(conv_id,mid)`)、租约恢复、崩溃/重启不丢。
+- **Cursor 消费者**只在有任务时被唤醒;会话内严格 FIFO,不同会话最多 3 路并行。
+
+### SLA(从"调度器发现消息"开始计时,非用户发送时刻)
+
+- `<10s`:等待正式回复。
+- `>=10s` 未完成:发送一次"已收到,正在处理"(占位,不推进正式回复游标)。
+- `>=45s` 未完成:已有结构化证据→用确定性模板发送部分结果;无证据→发送"仍在
+  排队/查询"的状态。占位/部分结果各自最多发一次,均不写 history、不推进游标。
+- 正式结果由 Cursor 完成后,经 `send-final` 按 `mid` 幂等发送(只发一次)。
+
+### 夜间静默(quiet hours)
+
+`00:00–07:00` 固定 300s 轮询:仍会入队并按 SLA 发占位/状态,但不启动耗时联网任务;
+`07:00` 后任务重新可处理。其余时段自适应 15s(刚有消息)/30s(普通)/120s(长空闲)。
+
+### Windows 生命周期(任务计划程序)
+
+用仓库内固定 Python 与绝对工作目录运行 `python scripts/scheduler.py run`;登录自启、
+异常每 1 分钟重启(最多 999 次),`MultipleInstances=IgnoreNew` 叠加进程内 PID 文件
+锁双重保证单实例。
+
+```powershell
+powershell -File scripts/scheduler_install.ps1 -WhatIf   # 干跑,只打印将写入的任务定义
+powershell -File scripts/scheduler_install.ps1           # 注册(幂等;更新定义需 -Force)
+powershell -File scripts/scheduler_start.ps1             # Start-ScheduledTask
+powershell -File scripts/scheduler_status.ps1            # 任务状态 + 健康快照(scheduler.py health)
+powershell -File scripts/scheduler_stop.ps1              # Stop-ScheduledTask
+powershell -File scripts/scheduler_uninstall.ps1         # 停止并注销(需确认;-Force 跳过)
+```
+
+调度器 CLI 直接用法:
+
+```powershell
+python scripts/scheduler.py init-db   # 创建/迁移 SQLite schema
+python scripts/scheduler.py once      # 跑一轮(不加锁;勿与 run 守护进程同时执行)
+python scripts/scheduler.py run       # 常驻循环(单实例)
+python scripts/scheduler.py health    # 打印最近健康快照(不含任何敏感字段)
+```
+
+### Cursor 队列消费者流程
+
+Cursor 在线时按 `skill/queue_consumer.md` 消费(默认入口见 `skill/loop_prompt.md`)。
+同一任务的所有命令使用同一个唯一 `<owner>`;每个会话独立上下文,严禁跨会话泄漏。
+
+```powershell
+python scripts/queue_cli.py next --owner <owner> --limit 3          # 领取(不同会话)
+python scripts/build_context.py --conv <conv_id>                    # 取该会话有界上下文
+python scripts/queue_cli.py mode --job-id <id> --owner <owner> --value fast_http
+python scripts/queue_cli.py renew --job-id <id> --owner <owner>     # 处理期间续租
+python scripts/queue_cli.py send-final --job-id <id> --owner <owner> --reply-file reply.txt
+python scripts/queue_cli.py list [--status pending]                 # 脱敏摘要
+```
+
+- `send-final` 先在 SQLite 预约 final 并保存 reply record,再发 HTTP,原子完成
+  `done`。**返回后不得再 `fail`**,它已完成 final 状态转换。
+- 联网优先 HTTP 快路径,证据逐条落库供 45s 部分结果使用:
+
+  ```powershell
+  python scripts/online_fetch.py json <url> --job-id <id> --owner <owner>
+  python scripts/online_fetch.py text <url> --job-id <id> --owner <owner>
+  ```
+
+  仅当 `online_fetch` 返回 `fallback=browser`,或页面必须点击/滚动/填表时,才用
+  browser-use;浏览器证据存为 UTF-8 JSON 后 `queue_cli.py evidence ... --file`。
+
+### 故障恢复与运维
+
+- **队列积压 / 租约过期**:调度器每轮 `recover_expired` 把过期 `processing` 任务
+  回退为 `retry_wait` 自动重试;查看 `queue_cli.py list --status retry_wait`。
+- **本地记账失败但已发送**:`send-final` 返回 `record_pending=true` 表示消息已发、
+  任务已 `done`,仅本地 history 待补。执行 `queue_cli.py repair-record --job-id <id>`
+  (只重放本地记录,永不重发)。
+- **uncertain 人工 reconcile**:发送结果未知(超时/3xx/429/5xx/连接异常)会冻结为
+  `uncertain`,**永不自动重发**。人工核对 VoceChat 后显式收敛:
+
+  ```powershell
+  python scripts/queue_cli.py reconcile --job-id <id> --action mark-done --confirm   # 已送达
+  python scripts/queue_cli.py reconcile --job-id <id> --action cancel --confirm      # 未送达并放弃
+  python scripts/queue_cli.py reconcile --job-id <id> --action retry --confirm --confirm-duplicate-risk
+  ```
+
+- **任务计划状态**:`scheduler_status.ps1` 查看 `State/LastRunTime/LastTaskResult` 与
+  健康快照;`LastTaskResult` 非 0 或长期无 `LastRunTime` 说明未正常常驻。
+- **重启不丢**:队列与三类回复标志全部持久化,进程/网络恢复后未完成任务自动续跑,
+  占位不重复、正式回复按 `mid` 幂等只发一次。
+
+### 与旧 `/loop` 的关系与迁移
+
+1. 保留现有 `data/state.json` 的 WebDAV ETag 与消息游标;首启自动创建 SQLite schema,
+   不迁移历史。
+2. 新消息先入 SQLite,`send-final` 成功后继续写现有 `data/history/*.jsonl`。
+3. 迁移期可保留手动 `/loop` 作为应急入口,但**不得与调度器同时消费同一队列**,否则
+   可能破坏会话 FIFO 或重复回复。
+4. 稳定后固定轮询职责由调度器接管;`skill/loop_prompt.md` 默认指向队列消费者,旧手动
+   流程降级到「应急模式」。
 
 ## 浏览器能力(browser-use skill,可选)
 

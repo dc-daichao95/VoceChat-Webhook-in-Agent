@@ -15,8 +15,18 @@
 ### 高
 
 - [ ] **会话级隔离修复**:数据按会话隔离(独立 JSONL + 游标),但"大脑"是同一个 Cursor 会话同时看到所有对话,存在跨会话信息泄漏(实测:私聊里说出了群里设置的称呼)。方案:每个会话一个独立 subagent,或在 loop 里严格只把"当前会话上下文"喂给回复生成(上下文压缩的 `build_context` 已为此打下基础)。
-- [ ] **重构 /loop 为可靠调度器 + Cursor 消费者**（设计已确认，待实施）:
-  - **设计规格**:`docs/superpowers/specs/2026-07-10-reliable-scheduler-online-response-design.md`。
+- [x] **重构 /loop 为可靠调度器 + Cursor 消费者**（Task 1–9 全部完成,严格 TDD + 规格/质量双评审）:
+  - **设计规格**:`docs/superpowers/specs/2026-07-10-reliable-scheduler-online-response-design.md`;**实施计划**:`docs/superpowers/plans/2026-07-10-reliable-scheduler-online-response.md`。
+  - **实施进度**(严格 TDD + 规格/质量双评审;全量测试 559 passed):
+    - [x] Task 1 SQLite 持久队列、租约、幂等状态机 — `scheduler/db.py`、`scheduler/schema.py`。
+    - [x] Task 2 轮询/退避/SLA 纯策略 — `scheduler/policy.py`。
+    - [x] Task 3 WebDAV 拉取入队 — `scheduler/ingest.py`。
+    - [x] Task 4 10s ack / 45s partial 幂等通知 + 事务性 outbox — `scheduler/notifier.py`、`scheduler/outbox.py`。
+    - [x] Task 5 有界 HTTP 快路径与渐进证据(SSRF 固定 IP 拨号、URL 脱敏、DOM 回退) — `scheduler/online.py`、`scheduler/_online_transport.py`、`scripts/online_fetch.py`。
+    - [x] Task 6 队列 CLI 与消费者流程(prepare→send→原子 done→可修复 record、uncertain 人工 reconcile、证据幂等) — `scripts/queue_cli.py`、`scheduler/consumer.py`、`scheduler/final_delivery.py`。
+    - [x] Task 7 独立调度器服务循环(每轮 recover→pull 熔断→ingest→notify→metrics、自适应轮询、单实例、指数退避不崩溃) — `scheduler/service.py`、`scripts/scheduler.py`。
+    - [x] Task 8 Windows 任务计划程序生命周期脚本(install/start/stop/status/uninstall,登录自启、失败自愈、单实例、幂等) — `scripts/scheduler_*.ps1`。
+    - [x] Task 9 配置、文档与夜间失败场景端到端回放验收 — `.env.example`(调度器/SLA/quiet/轮询/退避/路径,含 SchedulerConfig 一致性说明)、`.gitignore`(队列 DB/WAL/lock/日志)、`README.md`(「可靠调度器 + Cursor 消费者」架构/SLA/quiet/Windows 生命周期/消费者流程/故障恢复/迁移)、`tests/test_scheduler_replay.py`(注入时钟 + mock WebDAV/send 的夜间事故端到端回放:落盘→发现→10s ack→45s partial/status→卡死持久排队→过期回队→FIFO 幂等 send-final 只发一次→WebDAV 故障不阻塞→重启不丢→uncertain 人工 reconcile)。
   - **已确认根因(2026-07-09 夜间实测)**:`mid=1431` 于 23:50:48 落盘,23:50:49 即被轮询发现,但正式回复到 01:05:04 才发出(延迟 74.3 分钟)。Webhook、NAS 落盘、WebDAV 拉取和 30 秒检查均正常;延迟发生在消息被发现后交给 Cursor 智能体同步执行联网查询/生成回复的阶段。当前轮询发现消息后会退出等待并让出控制权,Cursor 调度、连接或耗时任务停顿时,轮询也随之停止;没有处理超时、占位回复、持久队列或自动恢复。根因是**可靠调度与智能处理耦合,且依赖 Cursor 会话持续存活**,不是轮询间隔本身。
   - **目标架构**:拆为两个进程:
     1. **独立常驻调度器**:WebDAV 拉取 → 持久化任务队列 → 必要时发送一次占位回复 → 重试/退避;不依赖 Cursor 在线。

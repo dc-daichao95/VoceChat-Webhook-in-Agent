@@ -83,7 +83,7 @@ def test_expired_lease_returns_to_retry(tmp_path):
     db = QueueDB(tmp_path / "queue.db")
     job_id = db.enqueue(payload(), detected_at=1000)
     db.claim(owner="cursor-a", now=1010, limit=1, lease_seconds=10)
-    assert db.recover_expired(now=1021) == 1
+    assert db.recover_expired(now=11_010) == 1
     assert db.get(job_id)["status"] == "retry_wait"
 
 
@@ -150,7 +150,7 @@ class QueueDB:
     def mark_partial_sent(self, job_id: int, sent_at: int) -> bool: ...
     def append_evidence(self, job_id: int, evidence: dict, now: int) -> None: ...
     def complete(self, job_id: int, owner: str, sent_at: int) -> bool: ...
-    def fail(self, job_id: int, owner: str, error: str, available_at: int) -> bool: ...
+    def fail(self, job_id: int, owner: str, error: str, available_at: int, now: int) -> bool: ...
     def cancel(self, job_id: int, now: int) -> bool: ...
     def due_for_ack(self, now: int, delay_ms: int) -> list: ...
     def due_for_partial(self, now: int, delay_ms: int) -> list: ...
@@ -521,14 +521,18 @@ Commands:
 ```text
 queue_cli.py next --owner <name> [--limit 3]
 queue_cli.py renew --job-id N --owner <name>
-queue_cli.py evidence --job-id N --file evidence.json
-queue_cli.py complete --job-id N --owner <name>
+queue_cli.py evidence --job-id N --owner <name> --file evidence.json
+queue_cli.py send-final --job-id N --owner <name> --reply-file reply.txt
+queue_cli.py repair-record --job-id N
+queue_cli.py reconcile --job-id N --action mark-done|cancel|retry --confirm
 queue_cli.py fail --job-id N --owner <name> --error TEXT
-queue_cli.py cancel --job-id N
+queue_cli.py cancel --job-id N --owner <name>
 queue_cli.py list [--status pending]
 ```
 
-`next` prints one JSON object per claimed job. `fail` uses `retry_delay_seconds(attempts + 1)`.
+`next` prints one JSON object per claimed job. `attempts` 是数据库成功领取后的
+一基次数（首次领取为 1）；`fail` 直接使用 `retry_delay_seconds(attempts)`，
+不得再次 `+1`。
 
 - [ ] **Step 4: Write consumer instructions**
 
@@ -540,9 +544,10 @@ queue_cli.py list [--status pending]
 4. Prefer `online_fetch.py`; write each evidence result immediately.
 5. Use browser-use only on explicit fallback.
 6. Renew lease during work.
-7. Call existing `reply_and_record.py` for final response.
-8. Only after exit code 0 call `queue_cli.py complete`.
-9. On any error call `queue_cli.py fail`.
+7. Use only `queue_cli.py send-final` for final responses.
+8. Use `repair-record` for local record pending; it never resends.
+9. Use explicit `reconcile` for uncertain final delivery.
+10. `send-final` owns final state transitions; never call `fail` after it returns.
 
 Replace fixed polling in `skill/loop_prompt.md` with a pointer to `skill/queue_consumer.md`; retain old manual flow under an “应急模式” heading.
 

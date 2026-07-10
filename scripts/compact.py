@@ -19,7 +19,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from brain import compaction  # noqa: E402
-from brain.context import _read_jsonl  # noqa: E402
+from brain.context import read_jsonl  # noqa: E402
 
 HISTORY_DIR = REPO / "data" / "history"
 ARCHIVE_DIR = REPO / "data" / "archive"
@@ -28,7 +28,7 @@ ARCHIVE_DIR = REPO / "data" / "archive"
 def archive_and_truncate(conv_id: str, history_dir: str, archive_dir: str, keep: int = compaction.RECENT_KEEP) -> int:
     """原子归档:先写 gzip 成功,再把活跃 JSONL 重写为最近 keep 条。返回归档条数。"""
     jsonl = Path(history_dir) / f"{conv_id}.jsonl"
-    old, recent = compaction.split_recent(_read_jsonl(jsonl), keep=keep)
+    old, recent = compaction.split_recent(read_jsonl(jsonl), keep=keep)
     if not old:
         return 0
     out_dir = Path(archive_dir) / conv_id
@@ -54,7 +54,7 @@ def cmd_check(args) -> int:
         print("COMPACT_NONE")
         return 0
     convs = [args.conv] if args.conv else list(_iter_convs(HISTORY_DIR))
-    pending = [(c, len(_read_jsonl(HISTORY_DIR / f"{c}.jsonl"))) for c in convs]
+    pending = [(c, len(read_jsonl(HISTORY_DIR / f"{c}.jsonl"))) for c in convs]
     pending = [(c, n) for c, n in pending if compaction.needs_compaction(n)]
     if not pending:
         print("COMPACT_NONE")

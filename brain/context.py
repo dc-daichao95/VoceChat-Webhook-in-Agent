@@ -8,7 +8,7 @@ from pathlib import Path
 from brain.compaction import RECENT_KEEP
 
 
-def _read_jsonl(p: Path) -> list:
+def read_jsonl(p: Path) -> list:
     """读 JSONL 为记录列表;文件缺失或坏行优雅跳过。"""
     if not p.exists():
         return []
@@ -36,7 +36,7 @@ def build_context(conv_id: str, history_dir: str, recent_keep: int = RECENT_KEEP
             facts = {}
     summary_p = base / f"{conv_id}.summary.md"
     summary = summary_p.read_text(encoding="utf-8").strip() if summary_p.exists() else ""
-    recent = _read_jsonl(base / f"{conv_id}.jsonl")[-recent_keep:]
+    recent = read_jsonl(base / f"{conv_id}.jsonl")[-recent_keep:]
     return {"facts": facts, "summary": summary, "recent": recent}
 
 

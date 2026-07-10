@@ -4,10 +4,14 @@ from pathlib import Path
 
 import pytest
 
-# scripts/ 下的模块(如 compact)可被测试直接 import。
+# scripts/ 下的模块(如 compact)可被测试直接 import。追加到末尾而非最前,
+# 以免 scripts/scheduler.py 抢在仓库根前,遮蔽 scheduler 包(import scheduler)。
+_REPO = str(Path(__file__).resolve().parent.parent)
 _SCRIPTS = str(Path(__file__).resolve().parent.parent / "scripts")
+if _REPO not in sys.path:
+    sys.path.insert(0, _REPO)
 if _SCRIPTS not in sys.path:
-    sys.path.insert(0, _SCRIPTS)
+    sys.path.append(_SCRIPTS)
 
 
 @pytest.fixture(autouse=True)
